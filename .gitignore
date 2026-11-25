@@ -1,0 +1,5 @@
+data/parsed/
+data/raw/
+data/ocr_cache/
+**/__pycache__/**
+.DS_Store
