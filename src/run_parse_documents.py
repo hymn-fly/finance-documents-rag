@@ -1,13 +1,15 @@
-"""Parse every file listed in data/documents.csv and save the extracted text.
+"""Parse and chunk every file listed in data/documents.csv.
 
 Usage: uv run python src/run_parse_documents.py [--only DOC_ID ...]
-Output: data/parsed/<doc_id>/<parser_name>.txt and data/parsed/parse_summary.csv
+Outputs: data/parsed/<doc_id>_<parser_name>.txt, data/parsed/parse_summary.csv,
+and data/chunks/chunks.jsonl.
 """
 import argparse
 import csv
 import time
 from pathlib import Path
 
+from chunking import chunk_document, save_chunks_to_jsonl
 from parsers import (
     parse_hwp_or_hwpx_with_hwp_hwpx_parser,
     parse_html_file,
@@ -17,7 +19,7 @@ from parsers import (
     parse_plain_text_file,
     parse_xml_file,
 )
-from schemas import DocumentRecord, ParseResult
+from schemas import Chunk, DocumentRecord, ParseResult
 from text_quality import compute_text_quality_metrics, is_text_quality_acceptable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +40,7 @@ def load_document_records_from_csv(csv_path: Path) -> list[DocumentRecord]:
         csv_rows = list(csv.DictReader(csv_file))
 
     return [
-        DocumentRecord(doc_id=row["doc_id"], format=row["format"], path=PROJECT_ROOT / row["path"])
+        DocumentRecord(**{**row, "path": PROJECT_ROOT / row["path"]})
         for row in csv_rows
     ]
 
@@ -114,16 +116,12 @@ def is_parse_result_acceptable(parse_result: ParseResult) -> bool:
     return is_text_quality_acceptable(compute_text_quality_metrics("".join(parse_result.page_texts)))
 
 
-def run_save_and_log_parser(document: DocumentRecord, parser_name: str, parser_function) -> ParseResult:
+def parse_document_and_save(document: DocumentRecord, parser_name: str, parser_function) -> ParseResult:
     parse_result = run_parser_on_document(document, parser_name, parser_function)
 
     # save only successful outputs
     if parse_result.succeeded:
         save_parse_result_text(parse_result)
-
-    status_label = "OK  " if parse_result.succeeded else "FAIL"
-    print(f"[{status_label}] {document.doc_id} / {parser_name}: {parse_result.total_chars} chars "
-          f"{parse_result.elapsed_seconds:.1f}s {parse_result.error_message}")
 
     return parse_result
 
@@ -134,7 +132,7 @@ def parse_document_with_fallback(document: DocumentRecord) -> list[ParseResult]:
 
     # try parsers in order and stop at the first acceptable result
     for parser_name, parser_function in parsers_in_order.items():
-        parse_result = run_save_and_log_parser(document, parser_name, parser_function)
+        parse_result = parse_document_and_save(document, parser_name, parser_function)
         document_results.append(parse_result)
 
         if is_parse_result_acceptable(parse_result):
@@ -147,6 +145,15 @@ def parse_document_with_fallback(document: DocumentRecord) -> list[ParseResult]:
     return document_results
 
 
+def select_accepted_parse_result(
+    document: DocumentRecord, parse_results: list[ParseResult],
+) -> ParseResult | None:
+    if document.path.suffix.lower() == ".pdf":
+        return next((result for result in parse_results if is_parse_result_acceptable(result)), None)
+
+    return next((result for result in parse_results if result.succeeded), None)
+
+
 def main() -> None:
     argument_parser = argparse.ArgumentParser()
     argument_parser.add_argument("--only", nargs="*", help="parse only these doc_ids")
@@ -157,17 +164,34 @@ def main() -> None:
     if command_line_arguments.only:
         documents = [doc for doc in documents if doc.doc_id in command_line_arguments.only]
 
-    # parse each document (pdf: fallback chain, others: their single parser)
+    # Parse each document using its existing parser or PDF fallback chain.
     all_results: list[ParseResult] = []
+    all_chunks: list[Chunk] = []
     for document in documents:
         if not document.path.exists():
             print(f"[SKIP] {document.doc_id}: file not found ({document.path.name})")
             continue
 
-        all_results.extend(parse_document_with_fallback(document))
+        parse_results = parse_document_with_fallback(document)
+        all_results.extend(parse_results)
 
-    # write the overall summary
+        # Only an accepted parse result can supply text for chunking.
+        accepted_result = select_accepted_parse_result(document, parse_results)
+        if accepted_result is None:
+            print(f"[NO CHUNK] {document.doc_id}: 0 chunks (no accepted parse result)")
+            continue
+
+        # Collect this document's chunks and report its count.
+        document_chunks = chunk_document(document, accepted_result)
+        all_chunks.extend(document_chunks)
+        
+        status_label = "OK  " if accepted_result.succeeded else "FAIL"
+        print(f"[{status_label}] {document.doc_id} / {accepted_result.parser_name}: {accepted_result.total_chars} chars, "
+                  f"{accepted_result.elapsed_seconds:.1f}s, {len(document_chunks)} chunks {accepted_result.error_message}")
+
+    # Replace both outputs with the results of this run.
     save_parse_summary_csv(all_results)
+    save_chunks_to_jsonl(all_chunks)
 
 
 if __name__ == "__main__":
