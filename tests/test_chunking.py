@@ -4,6 +4,9 @@ from chunking import (
     ArticleHeader,
     append_page_prefix_to_segment,
     find_article_headers,
+    is_table_of_contents_line,
+    remove_standalone_page_number_lines,
+    remove_table_of_contents_lines,
     split_pages_into_article_segments,
 )
 from schemas import ArticleSegment, PageCharOffset
@@ -22,6 +25,72 @@ REPRESENTATIVE_DESIGNATION = (
     "제12조(대표자의 지정) ① 계약자 또는 보험수익자가 2명 이상인 경우에는\n"
     "각 대표자를 1명 지정하여야 합니다."
 )
+
+
+@pytest.mark.parametrize(
+    "page_number",
+    [
+        pytest.param("12", id="digits"),
+        pytest.param(" - 12 - ", id="hyphens-with-padding"),
+        pytest.param("— 12 —", id="em-dashes"),
+        pytest.param("12 / 30", id="page-of-total"),
+        pytest.param("(12)", id="parentheses"),
+        pytest.param("p.12", id="page-prefix"),
+    ],
+)
+def test_remove_standalone_page_number_lines_removes_supported_formats(page_number: str):
+    # The footer at the end of a parsed PDF page may have no final newline.
+    body = "각 대표자를 1명 지정하여야 합니다.\n"
+
+    assert remove_standalone_page_number_lines(body + page_number) == body
+
+
+def test_remove_standalone_page_number_lines_preserves_body_and_line_endings():
+    # The hyphenated footer appears in law_silson_std_pdf on page 7.
+    first_line = "  보험수익자를 제3조(보험금의 지급사유) 제1호 및 제2호\r\n"
+    following_lines = "\r\n계약서 12\r\n20 . . ."
+    page_text = first_line + "- 7 -\r\n" + following_lines
+
+    assert remove_standalone_page_number_lines(page_text) == first_line + following_lines
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        pytest.param("  제18조［청약의 철회］ 38  ", True, id="abl-numbered-entry"),
+        pytest.param("제5조의2(특약 적용 범위) 21", True, id="subarticle-with-page"),
+        pytest.param("제1조(목적) ······ 3", True, id="article-with-dot-leader"),
+        pytest.param("1. 화재보험 ········ 55", True, id="section-with-dot-leader"),
+        pytest.param("4. 실손의료보험 ········", True, id="dot-leader-without-page"),
+        pytest.param("제 1조［목적］", False, id="abl-title-without-page-or-leader"),
+        pytest.param("제5조의 2", False, id="subarticle-number-is-not-a-page"),
+        pytest.param("제1조(목적) 이 계약은 다음과 같이 적용합니다.", False, id="article-with-body"),
+        pytest.param("계약일 ...", False, id="abl-ellipsis"),
+        pytest.param("20 . . .", False, id="im-bank-date-field"),
+        pytest.param("· · ·", False, id="kbstar-standalone-ellipsis"),
+        pytest.param("12", False, id="standalone-page-number"),
+        pytest.param("   ", False, id="blank-line"),
+    ],
+)
+def test_is_table_of_contents_line_recognizes_page_numbers_and_leaders(
+    line: str, expected: bool,
+):
+    assert is_table_of_contents_line(line) is expected
+
+
+def test_remove_table_of_contents_lines_preserves_surrounding_text():
+    # Short excerpts from the ABL and standard insurance terms, with mixed line endings.
+    heading = "  제 1조［목적］\r\n"
+    body = "\r\n계약일 ...\n"
+    page_text = (
+        "제18조［청약의 철회］ 38\r\n"
+        + heading
+        + "1. 화재보험 ········ 55\r\n"
+        + body
+        + "4. 실손의료보험 ········"
+    )
+
+    assert remove_table_of_contents_lines(page_text) == heading + body
 
 
 def test_find_article_headers_preserves_wrapped_abl_title_and_offsets():
