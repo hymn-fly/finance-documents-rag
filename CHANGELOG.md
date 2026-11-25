@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## 2026-11-25 — 문서별 청크 수 로그 추가
+
+**What**
+- 청킹 후 `[CHUNK] <doc_id>: <count> chunks`를 출력하고, 채택 결과가 없는 문서는 `[NO CHUNK]`에서 0개를 표시.
+
+**Why**
+- 배치 실행 중 문서별 청킹 결과를 콘솔에서 확인할 수 있게 함.
+
+**Changed files**
+- `src/run_parse_documents.py` — `main()`에서 문서별 청크 수 출력.
+
+**Verify**
+- `main()`을 `--only fss_case_001 knia_3500_scan`으로 실행해 로그의 건수와 JSONL의 문서별 건수가 일치하는지 확인.
+
+## 2026-11-25 — 조항 판별과 페이지 분할의 pytest 테스트
+
+**What**
+- `find_article_headers`, `split_pages_into_article_segments`, `append_page_prefix_to_segment`의 동작을 검증하는 테스트를 추가.
+- 실제 약관과 법령의 파싱 텍스트를 짧게 발췌해 여러 줄 제목, 한 페이지의 여러 조항, 다음 페이지로 이어지는 조항의 본문과 페이지 오프셋을 확인.
+
+**Why**
+- 조항 판별과 페이지 경계를 수정할 때 실제 문서에서 확인한 동작을 재현하기 위해 발췌문을 테스트에 포함.
+
+**Changed files**
+- `tests/test_chunking.py` — 문서 발췌 예시와 경계 조건 테스트.
+- `pyproject.toml`, `uv.lock` — pytest 개발 의존성, 테스트 경로 및 모듈 경로 설정.
+
+**Verify**
+- 저장소 루트에서 `uv run pytest`를 실행해 21개 테스트 통과 확인.
+
+## 2026-11-25 — 채택된 파싱 결과의 조항 단위 청킹
+
+**What**
+- 기존 PDF 품질 검사를 통과한 첫 파싱 결과와 PDF 외 형식의 성공한 파싱 결과를 채택. 채택 결과가 없으면 `[NO CHUNK]`를 기록.
+- 페이지에서 목차와 단독 쪽 번호 줄을 제거한 뒤 조항 머리로 구간을 나눔. 다음 페이지의 첫 조항 앞 텍스트는 앞 구간에 붙이고, 조항 머리가 없는 페이지는 본문 구간으로 처리.
+- 최대 1200자와 약 200자 겹침으로 분할. 원본 쪽 범위, 문서 메타데이터와 파서 이름을 포함해 `data/chunks/chunks.jsonl`에 UTF-8로 저장. `--only` 실행도 파싱 요약과 JSONL을 덮어씀.
+
+**Why**
+- 조항과 쪽 위치를 검색 결과에서 추적하고, 특약에 반복되는 조항 번호와 문서 내 여러 본문 구간에도 고유 ID를 부여하기 위해 같은 문서·조항 이름에서 순번을 이어서 매김.
+
+**Changed files**
+- `src/chunking.py` — 쪽 정리, 조항 판별, 페이지 오프셋, 겹침 분할, JSONL 저장.
+- `src/schemas.py` — 문서 메타데이터, `ArticleSegment`, `Chunk` 스키마.
+- `src/run_parse_documents.py` — 파싱 결과 채택과 청킹 연결.
+- `.gitignore` — 생성된 청크 출력 제외.
+
+**Verify**
+- `uv run python src/run_parse_documents.py --only abl_cancer_2404 fss_case_001 hana_credit_terms_2009 knia_3500_scan`으로 출력 범위, 반복 조항과 본문 순번, 두 PDF의 `[NO CHUNK]` 확인.
+- 전체 실행에서 47개 문서의 청크 4,341개를 검증. 최대 길이 1200자, ID 중복 0건이며, 조항별 순번·메타데이터·쪽 범위를 확인하고 겹침을 제거해 정리 후의 문서 텍스트를 정확히 복원함.
+- ABL 약관에서 여러 줄로 추출된 괄호 제목과 반복 조항을, `fss_case_001`에서 조항 없는 본문 분할을 확인. ABL 약관의 일부 목차 줄은 추출 텍스트에 쪽 번호와 점선이 없어 명시된 규칙에 따라 남으며 조항 머리로 판별됨.
+
 ## 2026-11-24 — documents.csv 문서 파싱 코드 추가
 
 **What**
