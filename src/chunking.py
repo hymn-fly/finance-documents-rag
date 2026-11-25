@@ -265,12 +265,16 @@ def get_chunk_metadata(document: DocumentRecord, parser_name: str) -> ChunkMetad
     )
 
 
+def clean_page_text(page_text: str) -> str:
+    page_without_toc = remove_table_of_contents_lines(page_text)
+    page_without_page_numbers = remove_standalone_page_number_lines(page_without_toc)
+
+    return re.sub(r"\n{2,}", "\n", page_without_page_numbers)
+
+
 def chunk_document(document: DocumentRecord, parse_result: ParseResult) -> list[Chunk]:
     # Clean each page before finding article boundaries and assigning offsets.
-    cleaned_pages = [
-        remove_standalone_page_number_lines(remove_table_of_contents_lines(page_text))
-        for page_text in parse_result.page_texts
-    ]
+    cleaned_pages = [clean_page_text(page_text) for page_text in parse_result.page_texts]
     segments = split_pages_into_article_segments(cleaned_pages)
 
     # Carry the sequence across repeated article names and all unlabelled body segments.
