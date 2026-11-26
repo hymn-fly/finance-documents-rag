@@ -2,13 +2,17 @@ import re
 
 from schemas import TextQualityMetrics
 
-# Acceptance thresholds for a parsed text (used to decide whether a PDF parser's result is good enough)
-MIN_WHITESPACE_RATIO = 0.1
+MIN_CHARS_PER_PAGE = 20
+MIN_CHARS_FOR_RATIO_CHECKS = 100
+LONG_HANGUL_RUN_LENGTH = 15
+MAX_LONG_HANGUL_RUN_RATIO = 0.3
 MIN_HANGUL_RATIO = 0.1
-MAX_BROKEN_CHAR_RATIO_EXCLUSIVE = 0.05
+MAX_BROKEN_CHAR_RATIO = 0.05
+MAX_SINGLE_CHAR_TOKEN_RATIO = 0.55
 
 CID_PLACEHOLDER_PATTERN = re.compile(r"\(cid:\d+\)")
 HANGUL_PATTERN = re.compile(r"[가-힣]")
+LONG_HANGUL_RUN_PATTERN = re.compile(rf"[가-힣]{{{LONG_HANGUL_RUN_LENGTH},}}")
 
 ALLOWED_RANGES = [
     (0x09, 0x0A), (0x0D, 0x0D), (0x20, 0x7E), (0xA0, 0xFF),
@@ -47,13 +51,24 @@ def compute_text_quality_metrics(text: str) -> TextQualityMetrics:
         whitespace_ratio=whitespace_chars / safe_denominator,
         hangul_ratio=hangul_chars / safe_denominator,
         broken_char_ratio=broken_chars / safe_denominator,
+        single_char_token_ratio=compute_single_char_token_ratio(text),
+        long_hangul_run_ratio=compute_long_hangul_run_ratio(text),
     )
 
 
-def is_text_quality_acceptable(metrics: TextQualityMetrics) -> bool:
-    return (
-        metrics.total_chars > 0
-        and metrics.whitespace_ratio >= MIN_WHITESPACE_RATIO
-        and metrics.hangul_ratio >= MIN_HANGUL_RATIO
-        and metrics.broken_char_ratio < MAX_BROKEN_CHAR_RATIO_EXCLUSIVE
-    )
+def compute_single_char_token_ratio(text: str) -> float:
+    tokens = text.split()
+    if not tokens:
+        return 0.0
+
+    return sum(len(token) == 1 for token in tokens) / len(tokens)
+
+
+def compute_long_hangul_run_ratio(text: str) -> float:
+    """한글 글자가 LONG_HANGUL_RUN_LENGTH 보다 길게 이어지는 부분을 잡아내는 함수"""
+    hangul_chars = len(HANGUL_PATTERN.findall(text))
+    if not hangul_chars:
+        return 0.0
+
+    long_run_chars = sum(len(run) for run in LONG_HANGUL_RUN_PATTERN.findall(text))
+    return long_run_chars / hangul_chars

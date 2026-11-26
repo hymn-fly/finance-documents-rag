@@ -1,5 +1,112 @@
 # CHANGELOG
 
+## 2026-11-26 — 테스트 함수 이름 단축과 한글 설명 주석 추가
+
+**What**
+- 테스트 함수 24개의 이름을 40자 이하로 줄이고, 각 함수 위에 무엇을 확인하는지 한글 주석을 추가. 검증 내용은 그대로이며, 판정 사유 문구 `긴 한글 연속 구간(공백 소실) 비율`에 맞춰 기대값 한 곳만 수정.
+- `AGENTS.md`에 테스트 함수 이름과 주석 지침 추가.
+
+**Why**
+- 시나리오를 모두 담은 긴 함수 이름이 가독성을 떨어뜨림.
+
+**Changed files**
+- `tests/test_chunking.py`, `tests/test_parse_judgement.py`, `AGENTS.md`.
+
+**Verify**
+- `uv run --locked pytest`에서 57개 통과.
+
+## 2026-11-26 — 공백 비율 판정을 긴 한글 연속 구간 비율로 교체, 짧은 페이지 분포 지표 검사 생략
+
+**What**
+- 페이지 판정에서 공백 비율(`< 0.1`) 검사를 빼고 **긴 한글 연속 구간 비율**(`long_hangul_run_ratio`) 검사로 교체. 공백 없이 15음절 이상 이어진 구간에 속한 한글 글자 수 ÷ 전체 한글 글자 수이며, 0.3을 넘으면 `reparse`. 공백 비율은 참고용으로 계속 계산해 CSV에 남김.
+- 100자 미만 페이지는 분포 지표(한글 비율, 긴 한글 연속 구간 비율, 한 글자 토큰 비율) 검사를 생략하고 `짧은 페이지 (N자), 분포 지표 검사 생략` 사유로 `pass`. `(cid:N)` 같은 깨진 문자 검사는 짧은 페이지에도 그대로 적용.
+- `judge_page`의 `skip_space` 인자 삭제. 검사를 `find_broken_text_reasons`와 `find_text_distribution_reasons`로 나눔. 사유는 깨진 문자 검사 결과부터 기록.
+- `parse_page_report.csv`에 `long_hangul_run_ratio` 열 추가.
+
+**Why**
+- 목차 페이지는 점선(`······`)이 글자 수만 늘려 공백 비율이 0.045까지 떨어지고, 22~35자짜리 표지와 제목 페이지는 공백 하나에도 비율이 크게 흔들려, 정상 페이지가 `reparse`로 판정됨(`db_silson_2101` 1·6·7·33쪽, `knia_7000` 17·29쪽, `law_silson_std_pdf` 1쪽).
+- 공백이 사라지면 한글이 끊기지 않고 길게 이어지므로, 이 증상을 직접 측정. 자세한 분석은 `problem_solving_history.md` 참고.
+
+**Changed files**
+- `src/text_quality.py` — `compute_long_hangul_run_ratio`, `LONG_HANGUL_RUN_LENGTH`, `MAX_LONG_HANGUL_RUN_RATIO`, `MIN_CHARS_FOR_RATIO_CHECKS` 추가, `MIN_WHITESPACE_RATIO` 삭제.
+- `src/schemas.py` — `TextQualityMetrics.long_hangul_run_ratio` 추가.
+- `src/parse_judgement.py` — 판정 기준 교체, 짧은 페이지 처리, CSV 열 추가.
+- `tests/test_parse_judgement.py` — 목차와 공백이 사라진 텍스트 구분, 짧은 페이지 생략, 15음절 경계, 경계값 테스트.
+- `problem_solving_history.md`(신규), `README.md` — 문제 해결 기록과 링크.
+
+**Verify**
+- `uv run --locked pytest`에서 57개 통과.
+- 전체 실행 결과 `pass` 41 → 43, `reparse` 6 → 4, `ocr` 2. 오판이던 7쪽이 `pass`로 바뀌고 `db_silson_2101`, `knia_7000`이 `pass`로 바뀜. 깨진 문자로 걸린 쪽(`hana_credit_terms_2009` 6쪽 등)은 그대로 `reparse`. 청크는 4,288개에서 4,295개로 늘어남.
+- `hana_credit_terms_2009` pymupdf 출력(공백 사라짐)을 새 기준으로 판정하면 본문 2~6쪽이 모두 `reparse`(비율 0.64~0.74). `pass` 페이지 중 최댓값은 0.038.
+
+## 2026-11-25 — 문서 판정 CSV에 재처리 대상 쪽 번호 추가
+
+**What**
+- `parse_report.csv`에 `reparse_pages`와 `ocr_pages` 열을 추가. 1부터 시작하는 원본 쪽 번호를 JSON 배열로 저장하며, 해당 쪽이 없으면 `[]`로 표시.
+
+**Why**
+- 문서별 판정에서 재추출이나 OCR이 필요한 쪽을 바로 확인할 수 있게 함.
+
+**Changed files**
+- `src/parse_judgement.py`, `tests/test_parse_judgement.py`.
+
+**Verify**
+- `uv run --locked pytest`로 배열 값과 빈 배열을 확인하고, 문서별 쪽 번호와 개수를 페이지 판정 CSV와 대조.
+
+## 2026-11-25 — 문서별·페이지별 파싱 판정 CSV 분리
+
+**What**
+- 문서별 `parse_report.csv`에 파서, 판정과 사유, 추출 글자 수, 생성 청크 수, 판정별 쪽 수, 파싱 시간과 오류를 한 행으로 기록.
+- 기존 페이지별 판정을 `parse_page_report.csv`에 저장.
+
+**Why**
+- 페이지별 행을 찾아보는 과정 없이 문서의 판정과 청킹 결과를 비교할 수 있게 함.
+
+**Changed files**
+- `src/parse_judgement.py`, `src/run_parse_documents.py`, `src/schemas.py` — 문서별 실행 결과와 두 CSV 저장.
+- `tests/test_parse_judgement.py` — `--only` 실행과 파싱 실패의 CSV 출력 확인.
+
+**Verify**
+- `uv run --locked pytest`로 전체 테스트 통과 확인.
+- 전체 실행 후 문서별 판정의 쪽 수, 추출 글자 수와 청크 수를 페이지별 판정, 파싱 요약, JSONL과 대조.
+
+## 2026-11-25 — PDF 기본 파서와 페이지별 파싱 판정
+
+**What**
+- PDF는 `pdfplumber`로 한 번 파싱하고, 추출 텍스트의 다섯 지표와 페이지 이미지 개수로 `pass`, `reparse`, `ocr`를 판정.
+- 문서에 재추출과 OCR 대상이 모두 있으면 문서 판정은 `reparse`로 두고 두 사유를 기록. PDF 파싱 예외는 `reparse`로 기록하고, 페이지가 없는 문서의 판정은 쪽 칸을 비워 CSV에 저장.
+- 통과한 페이지만 원래 번호로 청킹하고 제외된 페이지를 건너 조항을 이어 붙이지 않음. 배치가 끝나면 `parse_summary.csv`, `parse_report.csv`, `chunks.jsonl` 저장.
+
+**Why**
+- 한 문서에서 재처리가 필요한 페이지를 식별하면서 통과한 페이지는 검색에 사용할 수 있게 함.
+
+**Changed files**
+- `src/run_parse_documents.py` — 기본 파서 실행, 판정과 청킹 연결, 배치 출력.
+- `src/parse_judgement.py`, `src/schemas.py`, `src/text_quality.py` — 페이지 이미지, 텍스트 품질, 문서 판정, CSV.
+- `src/chunking.py` — 판정에 따른 페이지 제외와 원래 쪽 번호 유지.
+- `tests/test_parse_judgement.py` — 경계값, 페이지 수 불일치, 파싱 예외, 혼합 판정 문서의 청킹 검증.
+
+**Verify**
+- 전체 실행에서 문서 49개 판정. `pass` 41개, `reparse` 6개, `ocr` 2개, `fail` 0개. 원본이 없는 2개는 건너뜀.
+- `knia_3500_scan`은 8쪽 모두 `ocr`, `hana_credit_terms_2009`는 6쪽 모두 `reparse`이며 전체 깨진 문자 비율 0.973, `hanacard_std_2017`은 `pass`.
+- 원문 PDF 4쪽을 대조. `db_silson_2101` 1쪽은 짧은 표지의 공백 비율 0.0909로 `reparse` 판정됨. `inspect_chunks.py`와 전체 JSONL 검증에서 청크 4,288개가 모두 `pass` 범위에 속함을 확인.
+- `uv run --locked pytest`에서 50개 통과.
+
+## 2026-11-25 — 청킹 전 연속 줄바꿈 축소
+
+**What**
+- 페이지별 목차와 쪽 번호를 제거한 뒤 연속된 LF 두 개 이상을 LF 하나로 축소.
+
+**Why**
+- 파싱 또는 줄 제거로 생긴 연속 줄바꿈을 조항과 페이지 오프셋을 계산하기 전에 정리.
+
+**Changed files**
+- `src/chunking.py` — `clean_page_text`에서 페이지 정리와 줄바꿈 축소 적용.
+- `tests/test_chunking.py` — 정리된 텍스트와 글자 수를 청킹 결과에서 검증.
+
+**Verify**
+- `uv run --locked pytest`로 전체 테스트 통과 확인.
+
 ## 2026-11-25 — 문서별 청크 수 로그 추가
 
 **What**

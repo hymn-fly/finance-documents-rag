@@ -1,5 +1,6 @@
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -32,12 +33,53 @@ class ParseResult(BaseModel):
 
 
 class TextQualityMetrics(BaseModel):
-    """Character-level quality metrics of one parsed text."""
+    """Character and token quality metrics for extracted text."""
 
     total_chars: int
     whitespace_ratio: float
     hangul_ratio: float
     broken_char_ratio: float
+    single_char_token_ratio: float
+    long_hangul_run_ratio: float
+
+
+type PageVerdict = Literal["pass", "reparse", "ocr"]
+type DocVerdict = Literal["pass", "reparse", "ocr", "fail"]
+
+
+class PageImageInfo(BaseModel):
+    page: int
+    image_count: int
+    has_image: bool
+
+
+class PageReport(BaseModel):
+    page: int
+    verdict: PageVerdict
+    reasons: list[str]
+    metrics: TextQualityMetrics
+    has_image: bool
+    image_count: int = 0
+
+
+class DocReport(BaseModel):
+    doc_id: str
+    parser_name: str
+    verdict: DocVerdict
+    reasons: list[str]
+    usable_page_count: int
+    reparse_page_count: int
+    ocr_page_count: int
+    pages: list[PageReport]
+
+
+@dataclass(frozen=True)
+class DocumentRunReport:
+    """Parsing, judgement and chunk count for one document in the batch."""
+
+    parse_result: ParseResult
+    judgement: DocReport
+    chunk_count: int
 
 
 class PageCharOffset(BaseModel):

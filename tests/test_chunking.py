@@ -27,6 +27,7 @@ REPRESENTATIVE_DESIGNATION = (
 )
 
 
+# 지원하는 여러 형식의 쪽 번호만 있는 줄이 제거되는지 확인
 @pytest.mark.parametrize(
     "page_number",
     [
@@ -38,14 +39,15 @@ REPRESENTATIVE_DESIGNATION = (
         pytest.param("p.12", id="page-prefix"),
     ],
 )
-def test_remove_standalone_page_number_lines_removes_supported_formats(page_number: str):
+def test_remove_page_number_formats(page_number: str):
     # The footer at the end of a parsed PDF page may have no final newline.
     body = "각 대표자를 1명 지정하여야 합니다.\n"
 
     assert remove_standalone_page_number_lines(body + page_number) == body
 
 
-def test_remove_standalone_page_number_lines_preserves_body_and_line_endings():
+# 쪽 번호 줄을 제거해도 본문과 줄바꿈 문자는 그대로 남는지 확인
+def test_remove_page_number_keeps_body():
     # The hyphenated footer appears in law_silson_std_pdf on page 7.
     first_line = "  보험수익자를 제3조(보험금의 지급사유) 제1호 및 제2호\r\n"
     following_lines = "\r\n계약서 12\r\n20 . . ."
@@ -54,6 +56,7 @@ def test_remove_standalone_page_number_lines_preserves_body_and_line_endings():
     assert remove_standalone_page_number_lines(page_text) == first_line + following_lines
 
 
+# 쪽 번호나 점선이 있는 줄만 목차 줄로 판별하는지 확인
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
@@ -72,13 +75,14 @@ def test_remove_standalone_page_number_lines_preserves_body_and_line_endings():
         pytest.param("   ", False, id="blank-line"),
     ],
 )
-def test_is_table_of_contents_line_recognizes_page_numbers_and_leaders(
+def test_is_toc_line(
     line: str, expected: bool,
 ):
     assert is_table_of_contents_line(line) is expected
 
 
-def test_remove_table_of_contents_lines_preserves_surrounding_text():
+# 목차 줄만 제거하고 주변 텍스트는 보존하는지 확인
+def test_remove_toc_lines():
     # Short excerpts from the ABL and standard insurance terms, with mixed line endings.
     heading = "  제 1조［목적］\r\n"
     body = "\r\n계약일 ...\n"
@@ -93,7 +97,8 @@ def test_remove_table_of_contents_lines_preserves_surrounding_text():
     assert remove_table_of_contents_lines(page_text) == heading + body
 
 
-def test_find_article_headers_preserves_wrapped_abl_title_and_offsets():
+# 조 제목이 줄바꿈되어도 제목 전체와 시작 위치를 정확히 찾는지 확인
+def test_find_headers_wrapped_title():
     # abl_cancer_2404, page 26, preserves a line wrap within the article title.
     preceding_line = "험금을 감액하여 지급하는 방법을 말합니다.\n"
     wrapped_title = (
@@ -109,6 +114,7 @@ def test_find_article_headers_preserves_wrapped_abl_title_and_offsets():
     ]
 
 
+# 다양한 표기의 조 머리글에서 조 번호와 제목을 추출하는지 확인
 @pytest.mark.parametrize(
     ("line", "expected_article", "expected_title"),
     [
@@ -130,7 +136,7 @@ def test_find_article_headers_preserves_wrapped_abl_title_and_offsets():
         pytest.param("제1조 " + "가" * 26, "제1조", "가" * 26, id="30-character-plain-line"),
     ],
 )
-def test_find_article_headers_extracts_qualified_titles(
+def test_find_headers_title_formats(
     line: str, expected_article: str, expected_title: str,
 ):
     preceding_line = "표준약관\r\n"
@@ -140,6 +146,7 @@ def test_find_article_headers_extracts_qualified_titles(
     ]
 
 
+# 본문 속 조항 인용이나 너무 긴 일반 줄은 머리글로 보지 않는지 확인
 @pytest.mark.parametrize(
     "line",
     [
@@ -152,11 +159,12 @@ def test_find_article_headers_extracts_qualified_titles(
         pytest.param("보험수익자를 제3조(보험금의 지급사유)에 따라 정합니다.", id="inline-citation"),
     ],
 )
-def test_find_article_headers_rejects_citations_or_overlong_plain_lines(line: str):
+def test_find_headers_rejects_citations(line: str):
     assert find_article_headers(line) == []
 
 
-def test_find_article_headers_resumes_after_an_unclosed_title():
+# 닫히지 않은 제목이 있어도 다음 조 머리글은 찾는지 확인
+def test_find_headers_unclosed_title():
     unclosed_title = "제1조［목적\n"
     next_heading = "제2조［용어의 정의］"
 
@@ -165,7 +173,8 @@ def test_find_article_headers_resumes_after_an_unclosed_title():
     ]
 
 
-def test_split_pages_into_article_segments_preserves_body_and_cross_page_article():
+# 쪽을 넘어가는 조항을 하나로 묶고 본문과 쪽별 위치를 보존하는지 확인
+def test_split_segments_cross_page():
     # The excerpts contain two source pages, numbered 1–2 by the splitter.
     leading_text = "게 도달된 것으로 봅니다.\n"
     page_1_article_text = BENEFICIARY_DESIGNATION + "\n"
@@ -205,7 +214,8 @@ def test_split_pages_into_article_segments_preserves_body_and_cross_page_article
     assert "".join(segment.text for segment in segments) == "\n".join(pages)
 
 
-def test_split_pages_into_article_segments_keeps_headerless_pages_separate():
+# 조 머리글이 없는 쪽들은 쪽별로 따로 나뉘는지 확인
+def test_split_segments_headerless():
     # abl_cancer_2404, excerpts from the cover and greeting on pages 1–2.
     cover = "보험약관\n무배당\nABL인터넷암보험Ⅲ\n(갱신형)"
     greeting = "CEO인사말 존경하는 고객님께,\nABL생명의 소중한 가족이 되어주신 고객님께"
@@ -224,7 +234,8 @@ def test_split_pages_into_article_segments_keeps_headerless_pages_separate():
     ]
 
 
-def test_split_pages_into_article_segments_splits_same_page_headings_before_headerless_page():
+# 한 쪽의 여러 조항을 나누고, 뒤이은 머리글 없는 쪽은 별도 구간으로 두는지 확인
+def test_split_segments_same_page():
     # abl_cancer_2404 has two headings on page 24 and no heading on page 25.
     article_1 = (
         "제 1조［목적］\n"
@@ -251,12 +262,14 @@ def test_split_pages_into_article_segments_splits_same_page_headings_before_head
     assert [segment.text for segment in segments] == [article_1, article_2 + "\n", headerless_page]
 
 
+# 쪽이 없거나 빈 쪽이면 구간을 만들지 않는지 확인
 @pytest.mark.parametrize("pages", [[], [""]], ids=["no-pages", "empty-page"])
-def test_split_pages_into_article_segments_returns_no_segments_for_empty_input(pages: list[str]):
+def test_split_segments_empty_input(pages: list[str]):
     assert split_pages_into_article_segments(pages) == []
 
 
-def test_append_page_prefix_to_segment_extends_text_and_page_range():
+# 다음 쪽 앞부분을 붙이면 본문, 쪽 범위, 위치 정보가 늘어나는지 확인
+def test_append_page_prefix():
     # Include the inter-page newline already supplied by the caller.
     original_text = BENEFICIARY_DESIGNATION + "\n"
     original_offset = PageCharOffset(page=7, start=0, end=len(original_text))

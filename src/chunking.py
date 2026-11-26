@@ -174,11 +174,15 @@ def append_page_prefix_to_segment(segment: ArticleSegment, prefix: str, page: in
     segment.page_char_offsets.append(PageCharOffset(page=page, start=start, end=len(segment.text)))
 
 
-def split_pages_into_article_segments(page_texts: list[str]) -> list[ArticleSegment]:
+def split_pages_into_article_segments(
+    page_texts: list[str], *, skip_empty_pages: bool = False,
+) -> list[ArticleSegment]:
     segments: list[ArticleSegment] = []
 
     # Attribute each inter-page newline to the page it follows.
     for page, page_text in enumerate(page_texts, start=1):
+        if skip_empty_pages and not page_text.strip():
+            continue
         if page < len(page_texts):
             page_text += "\n"
         if not page_text:
@@ -190,10 +194,10 @@ def split_pages_into_article_segments(page_texts: list[str]) -> list[ArticleSegm
             segments.append(create_article_segment(page_text, page))
             continue
 
-        # Text before the first header continues the preceding segment when one exists.
+        # Text before the first header can continue a segment from the adjacent page.
         prefix = page_text[:headers[0].offset]
         if prefix:
-            if segments:
+            if segments and segments[-1].page_end == page - 1:
                 append_page_prefix_to_segment(segments[-1], prefix, page)
             else:
                 segments.append(create_article_segment(prefix, page))
@@ -272,10 +276,15 @@ def clean_page_text(page_text: str) -> str:
     return re.sub(r"\n{2,}", "\n", page_without_page_numbers)
 
 
-def chunk_document(document: DocumentRecord, parse_result: ParseResult) -> list[Chunk]:
+def chunk_document(
+    document: DocumentRecord, parse_result: ParseResult, *, usable_pages: set[int] | None = None,
+) -> list[Chunk]:
     # Clean each page before finding article boundaries and assigning offsets.
-    cleaned_pages = [clean_page_text(page_text) for page_text in parse_result.page_texts]
-    segments = split_pages_into_article_segments(cleaned_pages)
+    cleaned_pages = [
+        clean_page_text(page_text) if usable_pages is None or page in usable_pages else ""
+        for page, page_text in enumerate(parse_result.page_texts, start=1)
+    ]
+    segments = split_pages_into_article_segments(cleaned_pages, skip_empty_pages=usable_pages is not None)
 
     # Carry the sequence across repeated article names and all unlabelled body segments.
     sequences: Counter[str] = Counter()
