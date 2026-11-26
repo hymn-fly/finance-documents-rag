@@ -19,6 +19,7 @@ from parsers import (
     parse_pdf_with_pdfplumber,
     parse_pdf_with_pymupdf,
     parse_pdf_with_pypdf,
+    parse_pdf_with_pymupdf_layout_and_pdfplumber_text,
     parse_plain_text_file,
     parse_xml_file,
 )
@@ -29,7 +30,7 @@ DOCUMENTS_CSV_PATH = PROJECT_ROOT / "data" / "documents.csv"
 PARSED_OUTPUT_DIR = PROJECT_ROOT / "data" / "parsed"
 PAGE_SEPARATOR = "\n\n----- page break -----\n\n"
 
-DEFAULT_PDF_PARSER_NAME = "pdfplumber"
+DEFAULT_PDF_PARSER_NAME = "pymupdf_layout_pdfplumber_text"
 
 type ParserFunction = Callable[[Path], list[str]]
 
@@ -55,8 +56,6 @@ def select_parsers_for_document(document: DocumentRecord) -> dict[str, ParserFun
     # route by actual file extension, since csv "binary_office" covers both hwp and hwpx
     file_suffix = document.path.suffix.lower()
 
-    if file_suffix == ".pdf":
-        return {DEFAULT_PDF_PARSER_NAME: PDF_PARSERS[DEFAULT_PDF_PARSER_NAME]}
     if file_suffix in (".hwp", ".hwpx"):
         return {"hwp_hwpx_parser": parse_hwp_or_hwpx_with_hwp_hwpx_parser}
     if file_suffix in (".html", ".htm"):
@@ -96,6 +95,33 @@ def run_parser_on_document(
     )
 
 
+def run_layout_pdf_parser(document: DocumentRecord) -> ParseResult:
+    start_time = time.perf_counter()
+
+    # Extract each PDF page and record extraction errors in the batch result.
+    try:
+        parsed_pages = parse_pdf_with_pymupdf_layout_and_pdfplumber_text(document.path)
+    except Exception as parse_error:
+        return ParseResult(
+            doc_id=document.doc_id,
+            parser_name=DEFAULT_PDF_PARSER_NAME,
+            succeeded=False,
+            elapsed_seconds=time.perf_counter() - start_time,
+            error_message=f"{type(parse_error).__name__}: {parse_error}",
+        )
+
+    # Keep the page texts and their reading orders aligned in document order.
+    return ParseResult(
+        doc_id=document.doc_id,
+        parser_name=DEFAULT_PDF_PARSER_NAME,
+        succeeded=True,
+        page_texts=[page.text for page in parsed_pages],
+        page_reading_orders=[page.reading_order for page in parsed_pages],
+        total_chars=sum(len(page.text) for page in parsed_pages),
+        elapsed_seconds=time.perf_counter() - start_time,
+    )
+
+
 def save_parse_result_text(parse_result: ParseResult) -> None:
     output_path = PARSED_OUTPUT_DIR / f"{parse_result.doc_id}_{parse_result.parser_name}.txt"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +143,7 @@ def save_parse_summary_csv(parse_results: list[ParseResult]) -> None:
             ])
 
 
-def parse_document_with_default_parser(document: DocumentRecord) -> ParseResult:
+def run_non_pdf_parser(document: DocumentRecord) -> ParseResult:
     parsers = select_parsers_for_document(document)
     if not parsers:
         return ParseResult(
@@ -126,7 +152,14 @@ def parse_document_with_default_parser(document: DocumentRecord) -> ParseResult:
         )
 
     parser_name, parser_function = next(iter(parsers.items()))
-    parse_result = run_parser_on_document(document, parser_name, parser_function)
+    return run_parser_on_document(document, parser_name, parser_function)
+
+
+def parse_document_with_default_parser(document: DocumentRecord) -> ParseResult:
+    if document.path.suffix.lower() == ".pdf":
+        parse_result = run_layout_pdf_parser(document)
+    else:
+        parse_result = run_non_pdf_parser(document)
 
     if parse_result.succeeded:
         save_parse_result_text(parse_result)

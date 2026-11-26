@@ -11,6 +11,7 @@ from schemas import (
     DocumentRecord,
     DocumentRunReport,
     PageImageInfo,
+    PageReadingOrder,
     PageReport,
     PageVerdict,
     ParseResult,
@@ -24,6 +25,7 @@ from text_quality import (
     MIN_CHARS_PER_PAGE,
     MIN_HANGUL_RATIO,
     compute_text_quality_metrics,
+    strip_markdown_table_syntax,
 )
 
 PARSE_REPORT_CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "parsed" / "parse_report.csv"
@@ -35,7 +37,7 @@ PARSE_REPORT_COLUMNS = [
     "succeeded", "elapsed_seconds", "error_message",
 ]
 PARSE_PAGE_REPORT_COLUMNS = [
-    "doc_id", "parser", "page", "page_verdict", "page_reasons",
+    "doc_id", "parser", "page", "page_reading_order", "page_verdict", "page_reasons",
     "total_chars", "whitespace_ratio", "hangul_ratio", "broken_char_ratio",
     "single_char_token_ratio", "long_hangul_run_ratio", "image_count", "doc_verdict", "doc_reasons",
 ]
@@ -128,17 +130,19 @@ def get_page_images_for_parse_result(
 
 def build_page_reports(
     page_metrics: list[TextQualityMetrics], page_images: list[PageImageInfo],
+    page_reading_orders: list[PageReadingOrder | None],
 ) -> list[PageReport]:
     images_by_page = {image_info.page: image_info for image_info in page_images}
     page_reports: list[PageReport] = []
 
     # Use no image for unmatched parsed pages and for formats without image inspection.
-    for page, metrics in enumerate(page_metrics, start=1):
+    for page, (metrics, reading_order) in enumerate(zip(page_metrics, page_reading_orders, strict=True), start=1):
         image_info = images_by_page.get(page)
         has_image = image_info.has_image if image_info else False
         verdict, reasons = judge_page(metrics, has_image=has_image)
         page_reports.append(PageReport(
             page=page,
+            reading_order=reading_order,
             verdict=verdict,
             reasons=reasons,
             metrics=metrics,
@@ -162,9 +166,15 @@ def judge_parsed_result(document: DocumentRecord, parse_result: ParseResult) -> 
         )
 
     # Judge extracted text using image evidence where available.
-    page_metrics = [compute_text_quality_metrics(page_text) for page_text in parse_result.page_texts]
+    page_metrics = [
+        compute_text_quality_metrics(strip_markdown_table_syntax(page_text) if parse_result.page_reading_orders else page_text)
+        for page_text in parse_result.page_texts
+    ]
     page_images = get_page_images_for_parse_result(document, len(page_metrics)) if is_pdf else []
-    page_reports = build_page_reports(page_metrics, page_images)
+    page_reading_orders: list[PageReadingOrder | None] = list(parse_result.page_reading_orders)
+    page_reports = build_page_reports(
+        page_metrics, page_images, page_reading_orders or [None] * len(page_metrics),
+    )
 
     # Aggregate page verdicts into a document report.
     verdict, reasons = judge_document_from_page_reports(page_reports)
@@ -234,6 +244,7 @@ def save_parse_page_report_csv(
                 writer.writerow({
                     **doc_fields,
                     "page": page_report.page,
+                    "page_reading_order": page_report.reading_order,
                     "page_verdict": page_report.verdict,
                     "page_reasons": " | ".join(page_report.reasons),
                     **page_report.metrics.model_dump(),

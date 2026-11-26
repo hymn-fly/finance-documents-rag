@@ -13,6 +13,7 @@ MAX_SINGLE_CHAR_TOKEN_RATIO = 0.55
 CID_PLACEHOLDER_PATTERN = re.compile(r"\(cid:\d+\)")
 HANGUL_PATTERN = re.compile(r"[가-힣]")
 LONG_HANGUL_RUN_PATTERN = re.compile(rf"[가-힣]{{{LONG_HANGUL_RUN_LENGTH},}}")
+MARKDOWN_TABLE_SEPARATOR = re.compile(r"\|(?: --- \|)+")
 
 ALLOWED_RANGES = [
     (0x09, 0x0A), (0x0D, 0x0D), (0x20, 0x7E), (0xA0, 0xFF),
@@ -35,6 +36,29 @@ def count_broken_chars(text: str) -> int:
     broken_chars = sum(1 for char in text_without_placeholders if not is_allowed(char))
 
     return cid_placeholder_chars + broken_chars
+
+
+def strip_markdown_table_syntax(text: str) -> str:
+    lines = text.split("\n")
+    content_lines: list[str] = []
+    inside_table = False
+
+    # Recognize the table header and separator produced by the PDF parser.
+    for line, next_line in zip(lines, [*lines[1:], ""], strict=True):
+        is_table_row = line.startswith("| ") and line.endswith(" |")
+        starts_table = is_table_row and MARKDOWN_TABLE_SEPARATOR.fullmatch(next_line)
+        inside_table = is_table_row and (inside_table or bool(starts_table))
+
+        # Keep cell contents while omitting structural separators and empty rows.
+        if not inside_table:
+            content_lines.append(line)
+        elif not MARKDOWN_TABLE_SEPARATOR.fullmatch(line):
+            cell_text = line[2:-2].replace(" | ", " ").replace(r"\|", "|").replace("<br>", " ")
+            cell_text = " ".join(cell_text.split())
+            if cell_text:
+                content_lines.append(cell_text)
+
+    return "\n".join(content_lines)
 
 
 def compute_text_quality_metrics(text: str) -> TextQualityMetrics:

@@ -9,8 +9,18 @@ import parse_judgement
 import run_parse_documents
 from parse_judgement import judge_page, judge_parsed_result, save_parse_page_report_csv, save_parse_report_csv
 from run_parse_documents import chunk_pass_pages, parse_document_with_default_parser
-from schemas import DocumentRecord, DocumentRunReport, PageImageInfo, ParseResult, TextQualityMetrics
-from text_quality import compute_long_hangul_run_ratio, compute_text_quality_metrics
+from schemas import DocumentRecord, DocumentRunReport, PageImageInfo, ParseResult, PdfPageText, TextQualityMetrics
+from text_quality import compute_long_hangul_run_ratio, compute_text_quality_metrics, strip_markdown_table_syntax
+
+
+# 생성된 표의 문법만 빼고 셀의 줄바꿈, 파이프, 일반 본문은 내용으로 남기는지 확인
+def test_strip_table_syntax_keeps_cells():
+    page_text = (
+        "| 본문 행 |\n제1조 목적\n"
+        "| 제목 | 값 |\n| --- | --- |\n| 가\\|나<br>다 | 12 |\n본문 끝"
+    )
+
+    assert strip_markdown_table_syntax(page_text) == "| 본문 행 |\n제1조 목적\n제목 값\n가|나 다 12\n본문 끝"
 
 
 # 공백만 있는 텍스트와 일반 텍스트의 한 글자 토큰 비율 계산 확인
@@ -157,11 +167,10 @@ def test_chunk_pass_pages_excluded(monkeypatch, tmp_path):
 def test_failed_pdf_parse_report(monkeypatch, tmp_path):
     document = DocumentRecord(doc_id="bad", format="pdf", path=tmp_path / "bad.pdf")
 
-    def fail_to_parse_pdf(path: Path) -> list[str]:
+    def fail_to_parse_pdf(path: Path) -> list[PdfPageText]:
         raise ValueError("unreadable PDF")
 
-    # The fallback parsers are deliberately unavailable during the default path.
-    monkeypatch.setattr(run_parse_documents, "PDF_PARSERS", {"pdfplumber": fail_to_parse_pdf})
+    monkeypatch.setattr(run_parse_documents, "parse_pdf_with_pymupdf_layout_and_pdfplumber_text", fail_to_parse_pdf)
     parse_result = parse_document_with_default_parser(document)
     report = judge_parsed_result(document, parse_result)
 
@@ -185,7 +194,7 @@ def test_failed_pdf_parse_report(monkeypatch, tmp_path):
     assert row["reparse_pages"] == row["ocr_pages"] == "[]"
     with page_csv.open(encoding="utf-8-sig", newline="") as report_file:
         row, = csv.DictReader(report_file)
-    assert (row["doc_id"], row["parser"], row["page"], row["doc_verdict"]) == ("bad", "pdfplumber", "", "reparse")
+    assert (row["doc_id"], row["parser"], row["page"], row["doc_verdict"]) == ("bad", run_parse_documents.DEFAULT_PDF_PARSER_NAME, "", "reparse")
 
 
 # --only 실행 시 문서별·페이지별 CSV와 청크 파일의 수치가 일치하는지 확인
@@ -198,7 +207,13 @@ def test_main_saves_reports(monkeypatch, tmp_path):
     first_page = "제11조(보험수익자의 지정) 보험수익자는 계약자가 정할 수 있습니다."
     second_page = "표지"
     monkeypatch.setattr(run_parse_documents, "load_document_records_from_csv", lambda path: [document, unselected])
-    monkeypatch.setattr(run_parse_documents, "PDF_PARSERS", {"pdfplumber": lambda path: [first_page, second_page]})
+    monkeypatch.setattr(
+        run_parse_documents, "parse_pdf_with_pymupdf_layout_and_pdfplumber_text",
+        lambda path: [
+            PdfPageText(page=1, text=first_page, reading_order="stream"),
+            PdfPageText(page=2, text=second_page, reading_order="xy_cut"),
+        ],
+    )
     monkeypatch.setattr(parse_judgement, "detect_page_visual_objects", lambda path: [
         PageImageInfo(page=1, image_count=0, has_image=False),
         PageImageInfo(page=2, image_count=1, has_image=True),
@@ -232,3 +247,6 @@ def test_main_saves_reports(monkeypatch, tmp_path):
     assert [(row["doc_id"], row["page"], row["page_verdict"]) for row in page_rows] == [
         (document.doc_id, "1", "pass"), (document.doc_id, "2", "ocr"),
     ]
+    assert [row["page_reading_order"] for row in page_rows] == ["stream", "xy_cut"]
+    assert "page_parser_names" not in chunks[0]["meta"]
+    assert chunks[0]["meta"]["parser_name"] == run_parse_documents.DEFAULT_PDF_PARSER_NAME

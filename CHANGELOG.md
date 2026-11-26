@@ -1,5 +1,49 @@
 # CHANGELOG
 
+## 2026-11-26 — PDF 읽기 순서와 글자 추출 결합
+
+**What**
+- `pymupdf_layout_pdfplumber_text`에서 회전을 보정한 PyMuPDF 블록 순서에 pdfplumber 글자를 배정. 표 앞뒤의 본문을 유지하고 각 표는 마크다운으로 한 번 출력.
+- 표 밖의 블록에서 위쪽 역행이 3번 이상이면 XY-cut으로 재정렬. 페이지 CSV에 `page_reading_order`를 기록.
+- 판정 지표 계산에서는 생성된 마크다운 표의 구분 문법을 제외. 파싱 결과와 청크에는 표 마크다운을 포함.
+
+**Why**
+- 두 단이 섞이는 문제와 PyMuPDF 전체 페이지 추출에서 발생한 한글 공백 소실을 함께 줄임.
+
+**Changed files**
+- `src/parsers.py`, `src/schemas.py`, `src/run_parse_documents.py` — 블록 순서, 표, 글자 배정과 기본 파서.
+- `src/parse_judgement.py`, `src/text_quality.py`, `src/chunking.py` — 판정용 표 문법 정리와 출처 필드 변경.
+- `src/analysis/compare_xy_cut_order.py`, `src/analysis/compare_x_tolerance.py` — 순서와 띄어쓰기 비교.
+- `tests/test_parsers.py`, `tests/test_parse_judgement.py` — 합성 사례와 실제 DB·iM PDF 검증.
+
+**Verify**
+- `uv run --locked pytest` 71개 통과. DB 약관 10쪽의 90일 면책 문구와 iM 가계대출 7쪽의 ❷ 제목 순서 확인.
+- 정상 순서 문서 23개에서 블록이 2개 이상인 985쪽의 Kendall tau 평균은 60%·8pt에서 0.8160, 70%·10pt에서 0.8150. 순서가 뒤집힌 최저 점수 사례는 쪽 번호가 본문보다 먼저 저장된 짧은 페이지였으며 기존 기준을 유지.
+- 내용이 있는 표본 172쪽에서 x_tolerance 1.0·1.5·3.0의 평균 공백 비율은 0.2125·0.2122·0.2101, 한 글자 토큰 비율은 0.1433·0.1425·0.1345. 1.5에서 DB 10쪽의 띄어쓰기를 확인하고 기본값 유지.
+- 변경 전 판정 CSV는 `data/parsed/before_layout_parser/`에 보관하고, 전체 실행 전후를 `data/parsed/layout_parser_comparison.txt`에 기록.
+- 원본이 있는 49개 문서의 1,378쪽에서 `pass` 1,149 → 1,357쪽, `reparse` 219 → 11쪽, `ocr` 10 → 10쪽. PDF 11쪽에 XY-cut 적용. 청크 4,156 → 4,410개, PDF 파싱 시간 합계 128.03 → 97.66초.
+- 새 `reparse` 1쪽은 `db_silson_2101` 6쪽. 한글 비율이 0.1015에서 0.0997로 내려가 0.1 기준에 걸림.
+
+## 2026-11-26 — 표가 감지된 PDF 페이지를 PyMuPDF로 추출
+
+**What**
+- PDF 기본 파서 `pdfplumber_pymupdf_tables`는 `find_tables()`로 표가 감지된 쪽을 PyMuPDF로, 나머지를 pdfplumber로 추출하고 원래 쪽 순서로 병합.
+- 페이지 판정 CSV의 `page_parser`에 실제 파서를 기록하고, 청크의 `page_parser_names`에는 해당 쪽 범위에 쓰인 파서를 중복 없이 기록.
+
+**Why**
+- DB손해보험 약관 10쪽처럼 pdfplumber가 두 단의 문구를 한 줄로 합치는 사례에서 읽기 순서를 보존.
+
+**Changed files**
+- `src/parsers.py`, `src/run_parse_documents.py`, `src/schemas.py` — 페이지별 파서 선택, 추출, 병합.
+- `src/parse_judgement.py`, `src/chunking.py` — 페이지 판정 및 청크에 파서 출처 기록.
+- `tests/test_parsers.py`, `tests/test_parse_judgement.py` — 병합, 파서 분기, 출처 기록, 실제 DB 약관 검증.
+
+**Verify**
+- `uv run --locked pytest`에서 63개 통과. 실제 DB 약관 10쪽의 파서와 담보 예시 문구 확인.
+- `uv run python src/run_parse_documents.py` 실행 전후의 문서·페이지 판정 CSV를 대조. 변경 전 CSV는 `data/parsed/before_table_routing/`에 보관.
+- PyMuPDF로 추출한 718쪽 중 209쪽이 `pass`에서 `reparse`로 바뀜. `law_silson_std_pdf` 27쪽과 `sonsa_silson_std_2024` 1쪽에서 공백 소실을 확인. `knia_7000`, `knia_18259`의 페이지 판정은 유지됨.
+- 전체 청크는 4,295개에서 4,156개로 줄었고, PDF 파싱 시간 합계는 92.95초에서 128.03초로 늘어남. 새 청크 전체의 파서 목록을 페이지 판정 CSV와 대조.
+
 ## 2026-11-26 — 테스트 함수 이름 단축과 한글 설명 주석 추가
 
 **What**

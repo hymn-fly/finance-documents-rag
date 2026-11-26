@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel
 
@@ -20,6 +20,9 @@ class DocumentRecord(BaseModel):
     category: str = ""
 
 
+type PageReadingOrder = Literal["stream", "xy_cut"]
+
+
 class ParseResult(BaseModel):
     """Outcome of running one parser on one document."""
 
@@ -27,9 +30,53 @@ class ParseResult(BaseModel):
     parser_name: str
     succeeded: bool
     page_texts: list[str] = []
+    page_reading_orders: list[PageReadingOrder] = []
     total_chars: int = 0
     elapsed_seconds: float = 0.0
     error_message: str = ""
+
+
+class PdfLayoutBox(BaseModel, frozen=True):
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
+class LayoutGap(BaseModel):
+    start: float
+    end: float
+
+
+class PdfTableRegion(BaseModel):
+    box: PdfLayoutBox
+    markdown: str
+
+
+class OrderedBlockBoxes(BaseModel):
+    boxes: list[PdfLayoutBox]
+    reading_order: PageReadingOrder
+
+
+class PdfPageText(BaseModel):
+    page: int
+    text: str
+    reading_order: PageReadingOrder
+
+
+class PdfLayoutChar(TypedDict):
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+    text: str
+
+
+@dataclass
+class PdfReadingItems:
+    block_chars: list[list[PdfLayoutChar]]
+    table_chars: list[list[PdfLayoutChar]]
+    table_indices_by_block: list[list[int]]
 
 
 class TextQualityMetrics(BaseModel):
@@ -55,6 +102,7 @@ class PageImageInfo(BaseModel):
 
 class PageReport(BaseModel):
     page: int
+    reading_order: PageReadingOrder | None = None
     verdict: PageVerdict
     reasons: list[str]
     metrics: TextQualityMetrics
